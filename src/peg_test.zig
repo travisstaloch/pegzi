@@ -293,8 +293,9 @@ test "two defs" {
     try testing.expectEqual(@as(usize, 2), g.rules.count());
 }
 
-// TODO
-test "bug: printing seq last expr prints same flags as first" {
+test "bug repro: printing seq last expr prints same flags as first" {
+    // this was caused by usage of now deleted Node.writePayload() method
+    // which was copying flags from the first child to the containing seq/alt.
     const in =
         \\a<-b+ c
         \\d<-e+ / f
@@ -306,6 +307,7 @@ test "bug: printing seq last expr prints same flags as first" {
     {
         const root = g.rules.values()[0];
         try testing.expect(root == .seq);
+        try testing.expect(root.seq.flags.count() == 0);
         const items = root.seq.payload.items;
         try testing.expectEqual(@as(usize, 2), items.len);
         try testing.expect(items[0].sym.flags.count() == 1);
@@ -313,12 +315,12 @@ test "bug: printing seq last expr prints same flags as first" {
         try testing.expect(items[1].sym.flags.count() == 0);
         const printed = try std.fmt.allocPrint(talloc, "{}", .{root});
         defer talloc.free(printed);
-        if (true) return error.SkipZigTest; // TODO
         try testing.expectEqualStrings("b+ c", printed);
     }
     {
         const root = g.rules.values()[1];
         try testing.expect(root == .alt);
+        try testing.expect(root.alt.flags.count() == 0);
         const items = root.alt.payload.items;
         try testing.expectEqual(@as(usize, 2), items.len);
         try testing.expect(items[0].sym.flags.count() == 1);
@@ -326,7 +328,6 @@ test "bug: printing seq last expr prints same flags as first" {
         try testing.expect(items[1].sym.flags.count() == 0);
         const printed = try std.fmt.allocPrint(talloc, "{}", .{root});
         defer talloc.free(printed);
-        if (true) return error.SkipZigTest; // TODO
         try testing.expectEqualStrings("e+ / f", printed);
     }
 }
@@ -378,5 +379,24 @@ test "parse char set" {
         try testing.expect(set.sets.buffer[4] == .chars);
         try testing.expect(set.sets.buffer[4].chars.len == 3);
         try testing.expectEqualStrings("GHI", set.sets.buffer[4].chars);
+    }
+}
+
+test "negations" {
+    {
+        const in =
+            \\a<- ![a-z] b
+            \\
+        ;
+        var p = testParserInit(in);
+        defer p.deinit();
+        const g = try p.parse();
+        const root = g.rules.values()[0];
+        try testing.expect(root == .seq);
+        try testing.expect(root.seq.flags.count() == 0);
+        const items = root.seq.payload.items;
+        try testing.expectEqual(@as(usize, 2), items.len);
+        try testing.expect(items[0] == .char_set);
+        try testing.expect(items[0].char_set.flags.contains(.not));
     }
 }

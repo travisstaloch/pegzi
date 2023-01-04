@@ -149,16 +149,6 @@ pub const Node = union(enum) {
         };
     }
 
-    fn writePayload(a: *Node, comptime tag: Tag, b: anytype) void {
-        var aflags = a.flagsConst();
-        a.* = @unionInit(Node, @tagName(tag), .{ .payload = b });
-        a.setFlags(aflags);
-    }
-    fn writeKeepingFlags(dest: *Node, src: anytype) void {
-        var aflags = dest.flagsConst();
-        dest.* = src;
-        dest.setFlags(aflags.unionWith(src.flagsConst()));
-    }
     pub fn isAtom(n: Node) bool {
         return @enumToInt(@as(Tag, n)) <= @enumToInt(@as(Tag, .group));
     }
@@ -495,12 +485,14 @@ pub const Parser = struct {
                 if (i > chars_start)
                     try set.sets.append(.{ .chars = bytes[chars_start..i] });
                 chars_start = i + 3;
+                if (c >= bytes[i + 2]) return error.InvalidCharSetRange;
                 const range: CharSet.Set = .{ .range = .{ c, bytes[i + 2] } };
                 try set.sets.append(range);
             }
         }
         if (chars_start < bytes.len)
             try set.sets.append(.{ .chars = bytes[chars_start..] });
+        // TODO maybe check for duplicate chars?
         return set;
     }
 
@@ -580,7 +572,7 @@ pub const Parser = struct {
         if (p.isSeqEnd()) return node;
         { // turn node into a seq
             const copy = node;
-            node.writePayload(.seq, .{});
+            node = Node.init(.seq, .{});
             try node.seq.payload.append(p.alloc, copy);
         }
 
@@ -605,7 +597,7 @@ pub const Parser = struct {
         if (p.isExprEnd()) return node;
         { // turn node into an alt
             const copy = node;
-            node.writePayload(.alt, .{});
+            node = Node.init(.alt, .{});
             try node.alt.payload.append(p.alloc, copy);
         }
 
