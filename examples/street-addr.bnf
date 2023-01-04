@@ -1,0 +1,24 @@
+ <postal-address> ::= <name-part> <street-address> <zip-part>
+      <name-part> ::= <personal-part> <spc> <last-name> <spc> <opt-suffix-part> <EOL> | <personal-part> <spc> <name-part>
+<opt-suffix-part> ::= "Sr." | "Jr." | <roman-numeral> | ""
+  <personal-part> ::= <initial> "." | <first-name>
+ <street-address> ::= <house-num> <spc> <street-name> <opt-apt-num> <EOL>
+       <zip-part> ::= <town-name> "," <state-code> <spc> <ZIP-code> <EOL>
+    <opt-apt-num> ::= <spc> <apt-num> | ""
+
+<spc> ::= ' '
+<asfd>            ::= ("a" | "b") "c" | "d"
+<initial> ::= <ucase>
+<ucase> ::= "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" | "K" | "L" | "M" | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" | "W" | "X" | "Y"
+<first-name> ::= "Jimbo" | "Joey" | "Johnny"
+<last-name> ::= "Adams" | "Fisher" | "Jones"
+<EOL> ::= "\n"
+<house-num> ::= "1234" | "3456"
+<street-name> ::= "Pacific St." | "Maple St." | "Dennis St" | "Orange Ave."
+<town-name> ::= "Ellensburg" | "Yakima" | "Spanaway"
+<apt-num> ::= "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"
+<state-code> ::= "WA" | "CA" | "OR"
+<roman-numeral> ::= "I" | "II" | "III"
+<ZIP-code> ::= "923423" | "145095" | "3093643"
+<test-escapes> ::= '\nabcd\refgh'
+<test-group> ::= ("a" | "b") "c" | "d" | ("e" ("f" | "g" "h") "i")
