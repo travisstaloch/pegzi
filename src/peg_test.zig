@@ -60,7 +60,7 @@ test "parse flags" {
     testing.log_level = log_level;
     {
         var g = try getGrammar(
-            \\a <- !"a"?*+
+            \\a <- !"a"
         );
         defer g.deinit(talloc);
         const dstr = g.rules.values()[0];
@@ -296,8 +296,8 @@ test "two defs" {
 // TODO
 test "bug: printing seq last expr prints same flags as first" {
     const in =
-        \\a<-b?+ c
-        \\d<-e?+ / f
+        \\a<-b+ c
+        \\d<-e+ / f
         \\
     ;
     var p = testParserInit(in);
@@ -308,27 +308,25 @@ test "bug: printing seq last expr prints same flags as first" {
         try testing.expect(root == .seq);
         const items = root.seq.payload.items;
         try testing.expectEqual(@as(usize, 2), items.len);
-        try testing.expect(items[0].sym.flags.count() == 2);
-        try testing.expect(items[0].sym.flags.contains(.opt));
+        try testing.expect(items[0].sym.flags.count() == 1);
         try testing.expect(items[0].sym.flags.contains(.some));
         try testing.expect(items[1].sym.flags.count() == 0);
         const printed = try std.fmt.allocPrint(talloc, "{}", .{root});
         defer talloc.free(printed);
         if (true) return error.SkipZigTest; // TODO
-        try testing.expectEqualStrings("b?+ c", printed);
+        try testing.expectEqualStrings("b+ c", printed);
     }
     {
         const root = g.rules.values()[1];
         try testing.expect(root == .alt);
         const items = root.alt.payload.items;
         try testing.expectEqual(@as(usize, 2), items.len);
-        try testing.expect(items[0].sym.flags.count() == 2);
-        try testing.expect(items[0].sym.flags.contains(.opt));
+        try testing.expect(items[0].sym.flags.count() == 1);
         try testing.expect(items[0].sym.flags.contains(.some));
         try testing.expect(items[1].sym.flags.count() == 0);
         const printed = try std.fmt.allocPrint(talloc, "{}", .{root});
         defer talloc.free(printed);
         if (true) return error.SkipZigTest; // TODO
-        try testing.expectEqualStrings("e?+ / f", printed);
+        try testing.expectEqualStrings("e+ / f", printed);
     }
 }

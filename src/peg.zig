@@ -481,8 +481,8 @@ pub const Parser = struct {
             .char_set => |s| Node.init(.char_set, s),
             .dot => Node.init(.dot, {}),
             else => {
-                p.errFmt("internal error: {s}", .{@tagName(t)});
-                panicf("internal error: {s}", .{@tagName(t)});
+                p.errFmt("unexpected token: '{}'", .{t});
+                return error.UnexpectedToken;
             },
         };
         return node;
@@ -513,25 +513,14 @@ pub const Parser = struct {
         }
     }
 
+    // ( QUERY / STAR / PLUS )?
     fn parseMods(p: *Parser, node: *Node) void {
-        while (true) {
-            const t2 = p.peek(0);
-            switch (t2) {
-                .some => {
-                    node.flags().insert(.some);
-                    _ = p.next();
-                },
-                .many => {
-                    node.flags().insert(.many);
-                    _ = p.next();
-                },
-                .opt => {
-                    node.flags().insert(.opt);
-                    _ = p.next();
-                },
-                else => break,
-            }
-        }
+        if (p.consume(.opt))
+            node.flags().insert(.opt)
+        else if (p.consume(.many))
+            node.flags().insert(.many)
+        else if (p.consume(.some))
+            node.flags().insert(.some);
     }
 
     // Suffix <- Primary ( QUERY / STAR / PLUS )?
