@@ -8,7 +8,7 @@ const Parser = peg.Parser;
 const Node = peg.Node;
 const Args = peg.Args;
 
-pub const log_level: std.log.Level = .debug;
+pub const log_level: std.log.Level = .err;
 
 fn usage(exepath: []const u8) void {
     std.debug.print("usage: {s} <peg_filepath> <start_symbol>\n", .{exepath});

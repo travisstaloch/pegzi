@@ -55,10 +55,10 @@ pub const Node = union(enum) {
     sstr: StrWithFlags,
     char_set: StrWithFlags,
     dot: VoidWithFlags,
+    group: NodeWithFlags,
     // end atoms
     seq: ListWithFlags,
     alt: ListWithFlags,
-    group: NodeWithFlags,
 
     pub const List = std.ArrayListUnmanaged(Node);
     pub const Flag = enum { many, some, opt, not };
@@ -160,8 +160,7 @@ pub const Node = union(enum) {
         dest.setFlags(aflags.unionWith(src.flagsConst()));
     }
     pub fn isAtom(n: Node) bool {
-        // return n == .sym or n == .dstr or n == .sstr or n == .char_set;
-        return @enumToInt(@as(Tag, n)) <= @enumToInt(@as(Tag, .dot));
+        return @enumToInt(@as(Tag, n)) <= @enumToInt(@as(Tag, .group));
     }
 };
 
@@ -341,7 +340,7 @@ pub const Parser = struct {
     pub const Token = union(enum) {
         end,
         bar,
-        groupend,
+        rparen,
         // end seq terminators
         not,
         amp,
@@ -353,7 +352,7 @@ pub const Parser = struct {
         leftarrow,
         // start atoms
         dot,
-        group,
+        lparen,
         action,
         dstr: []const u8,
         sstr: []const u8,
@@ -367,7 +366,7 @@ pub const Parser = struct {
             return @enumToInt(t) >= first_atom;
         }
 
-        const last_seq_terminator = @enumToInt(Token.groupend);
+        const last_seq_terminator = @enumToInt(Token.rparen);
         pub inline fn isEndSeq(t: Token) bool {
             return @enumToInt(t) <= last_seq_terminator;
         }
@@ -387,8 +386,8 @@ pub const Parser = struct {
                 .bar => try writer.writeByte('/'),
                 .end => _ = try writer.write("EOF"),
                 .leftarrow => _ = try writer.write("<-"),
-                .group => try writer.writeByte('('),
-                .groupend => try writer.writeByte(')'),
+                .lparen => try writer.writeByte('('),
+                .rparen => try writer.writeByte(')'),
                 .amp => try writer.writeByte('&'),
                 .action => try writer.writeByte('<'),
             }
@@ -399,6 +398,7 @@ pub const Parser = struct {
         p.content = p.content[n..];
         return t;
     }
+
     fn matchSkipContent(p: *Parser, s: []const u8) bool {
         return if (mem.startsWith(u8, p.content, s)) blk: {
             p.content = p.content[s.len..];
@@ -419,13 +419,16 @@ pub const Parser = struct {
             '?' => p.skipYield(1, .opt),
             '*' => p.skipYield(1, .many),
             '+' => p.skipYield(1, .some),
-            '(' => p.skipYield(1, .group),
-            ')' => p.skipYield(1, .groupend),
+            '(' => p.skipYield(1, .lparen),
+            ')' => p.skipYield(1, .rparen),
             '.' => p.skipYield(1, .dot),
             else => if (p.matchSkipContent("<-"))
                 .leftarrow
             else if (std.ascii.isAlphabetic(c))
-                Token{ .sym = try p.readUntilCharFn(not(u8, oneOf(u8, std.ascii.isAlphanumeric, isItem(u8, '_'))), 0) }
+                Token{ .sym = try p.readUntilCharFn(
+                    not(u8, oneOf(u8, std.ascii.isAlphanumeric, isItem(u8, '_'))),
+                    0,
+                ) }
             else {
                 p.errFmt("internal error: nextToken() unhandled '{c}'", .{c});
                 panicf("internal error: nextToken() unhandled '{c}'", .{c});
@@ -434,7 +437,6 @@ pub const Parser = struct {
     }
 
     pub fn next(p: *Parser) Token {
-        // println("next() {any}", .{p.peeks.slice()});
         if (p.peeks.len > 0) {
             return p.peeks.orderedRemove(0);
         } else return p.nextToken() catch |e|
@@ -442,7 +444,6 @@ pub const Parser = struct {
     }
 
     pub fn peek(p: *Parser, idx: u2) Token {
-        // println("peek({}) peeks {any}", .{ idx, p.peeks.slice() });
         if (idx >= p.peeks.buffer.len)
             panicf("internal error in peek() index '{}' out of range", .{idx});
         return if (idx < p.peeks.len) p.peeks.get(idx) else blk: {
@@ -472,22 +473,6 @@ pub const Parser = struct {
         return istag;
     }
 
-    fn parseAtom(p: *Parser, t: Token) !Node {
-        println("parseAtom() t={}", .{t});
-        var node = switch (t) {
-            .sym => |s| Node.init(.sym, s),
-            .dstr => |s| Node.init(.dstr, s),
-            .sstr => |s| Node.init(.sstr, s),
-            .char_set => |s| Node.init(.char_set, s),
-            .dot => Node.init(.dot, {}),
-            else => {
-                p.errFmt("unexpected token: '{}'", .{t});
-                return error.UnexpectedToken;
-            },
-        };
-        return node;
-    }
-
     // Primary <- Identifier !LEFTARROW
     //            / OPEN Expression CLOSE
     //            / Literal
@@ -498,35 +483,37 @@ pub const Parser = struct {
     //            / END
     fn parsePrimary(p: *Parser) Error!Node {
         println("parsePrimary() peeks={any}", .{p.peeks.slice()});
-        switch (p.next()) {
-            .sym => |t| {
+        return switch (p.next()) {
+            .sym => |t| blk: {
                 assert(p.peek(0) != .leftarrow);
-                return Node.init(.sym, t);
+                break :blk Node.init(.sym, t);
             },
-            .group => {
+            .lparen => blk: {
                 var node = try p.alloc.create(Node);
                 node.* = try p.parseExpr();
-                _ = try p.expectToken(.groupend);
-                return Node.init(.group, node);
+                _ = try p.expectToken(.rparen);
+                break :blk Node.init(.group, node);
             },
-            else => |t| return p.parseAtom(t),
-        }
+            .dstr => |t| Node.init(.dstr, t),
+            .sstr => |t| Node.init(.sstr, t),
+            .char_set => |t| Node.init(.char_set, t),
+            .dot => Node.init(.dot, {}),
+            else => |t| {
+                p.errFmt("unexpected token: '{}'", .{t});
+                return error.UnexpectedToken;
+            },
+        };
     }
 
-    // ( QUERY / STAR / PLUS )?
-    fn parseMods(p: *Parser, node: *Node) void {
+    // Suffix <- Primary ( QUERY / STAR / PLUS )?
+    fn parseSuffix(p: *Parser) Error!Node {
+        var node = try p.parsePrimary();
         if (p.consume(.opt))
             node.flags().insert(.opt)
         else if (p.consume(.many))
             node.flags().insert(.many)
         else if (p.consume(.some))
             node.flags().insert(.some);
-    }
-
-    // Suffix <- Primary ( QUERY / STAR / PLUS )?
-    fn parseSuffix(p: *Parser) Error!Node {
-        var node = try p.parsePrimary();
-        p.parseMods(&node);
         return node;
     }
 
@@ -550,7 +537,7 @@ pub const Parser = struct {
         return node;
     }
 
-    inline fn endSeq(p: *Parser) bool {
+    inline fn isSeqEnd(p: *Parser) bool {
         return p.peek(0).isEndSeq() or p.peek(1) == .leftarrow;
     }
 
@@ -558,9 +545,9 @@ pub const Parser = struct {
     fn parseSeq(p: *Parser) Error!Node {
         var node = try p.parsePrefix();
         println("parseSeq() 1 peeks {any} node={}", .{ p.peeks.slice(), node });
-        if (p.endSeq()) return node;
 
-        {
+        if (p.isSeqEnd()) return node;
+        { // turn node into a seq
             const copy = node;
             node.writePayload(.seq, .{});
             try node.seq.payload.append(p.alloc, copy);
@@ -570,12 +557,12 @@ pub const Parser = struct {
             const node2 = try p.parsePrefix();
             println("parseSeq() 2 node2={}", .{node2});
             try node.seq.payload.append(p.alloc, node2);
-            if (p.endSeq()) break;
+            if (p.isSeqEnd()) break;
         }
         return node;
     }
 
-    inline fn exprEnd(p: *Parser) bool {
+    inline fn isExprEnd(p: *Parser) bool {
         return !p.consume(.bar) or p.peek(1) == .leftarrow or p.peek(0) == .end;
     }
 
@@ -584,8 +571,8 @@ pub const Parser = struct {
         var node = try p.parseSeq();
         println("parseExpr() 1 node={} peeks={any}", .{ node, p.peeks.slice() });
 
-        if (p.exprEnd()) return node;
-        {
+        if (p.isExprEnd()) return node;
+        { // turn node into an alt
             const copy = node;
             node.writePayload(.alt, .{});
             try node.alt.payload.append(p.alloc, copy);
@@ -595,7 +582,7 @@ pub const Parser = struct {
             var node2 = try p.parseSeq();
             try node.alt.payload.append(p.alloc, node2);
             println("parseExpr() 2 node2={}", .{node2});
-            if (p.exprEnd()) break;
+            if (p.isExprEnd()) break;
         }
         return node;
     }
