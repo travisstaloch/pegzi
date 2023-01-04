@@ -164,6 +164,17 @@ pub const Node = union(enum) {
     }
 };
 
+pub const CharSet = struct {
+    sets: Sets = Sets.init(0) catch unreachable,
+    negated: bool = false,
+
+    pub const Set = union(enum) {
+        chars: []const u8,
+        range: [2]u8,
+    };
+    pub const Sets = std.BoundedArray(Set, 64);
+};
+
 pub const Parser = struct {
     alloc: Allocator,
     content: []u8,
@@ -173,7 +184,7 @@ pub const Parser = struct {
     peeks: Peeks = Peeks.init(0) catch unreachable,
 
     const Peeks = std.BoundedArray(Token, 4); // TODO use ringbuffer
-    const Error = error{
+    pub const Error = error{
         UnexpectedContent,
         CharNotFound,
         InvalidEscape,
@@ -451,8 +462,7 @@ pub const Parser = struct {
             while (i <= idx) : (i += 1) {
                 const t = p.nextToken() catch |e|
                     panicf("internal error in peek(): {s}", .{@errorName(e)});
-                p.peeks.append(t) catch |e|
-                    panicf("internal error in peek(): {s}", .{@errorName(e)});
+                p.peeks.append(t) catch unreachable;
                 if (i == idx) break :blk p.peeks.buffer[i];
             }
         };
@@ -471,6 +481,27 @@ pub const Parser = struct {
         const istag = p.peek(0) == tag;
         if (istag) _ = p.next();
         return istag;
+    }
+
+    pub fn parseCharSet(bytes_: []const u8) !CharSet {
+        var bytes = bytes_;
+        var set: CharSet = .{};
+        set.negated = bytes[0] == '^';
+        bytes = bytes[@boolToInt(set.negated)..];
+        var chars_start: usize = 0;
+        for (bytes) |c, i| {
+            if (i + 2 < bytes.len and bytes[i + 1] == '-') {
+                // found range
+                if (i > chars_start)
+                    try set.sets.append(.{ .chars = bytes[chars_start..i] });
+                chars_start = i + 3;
+                const range: CharSet.Set = .{ .range = .{ c, bytes[i + 2] } };
+                try set.sets.append(range);
+            }
+        }
+        if (chars_start < bytes.len)
+            try set.sets.append(.{ .chars = bytes[chars_start..] });
+        return set;
     }
 
     // Primary <- Identifier !LEFTARROW

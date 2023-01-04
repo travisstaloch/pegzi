@@ -330,3 +330,53 @@ test "bug: printing seq last expr prints same flags as first" {
         try testing.expectEqualStrings("e+ / f", printed);
     }
 }
+
+const parseCharSet = peg.Parser.parseCharSet;
+test "parse char set" {
+    {
+        const set = try parseCharSet("^\n");
+        try testing.expect(set.negated);
+        try testing.expect(set.sets.len == 1);
+        try testing.expect(set.sets.buffer[0] == .chars);
+        try testing.expect(set.sets.buffer[0].chars.len == 1);
+        try testing.expect(set.sets.buffer[0].chars[0] == '\n');
+    }
+    {
+        const set = try parseCharSet("^0-9");
+        try testing.expect(set.negated);
+        try testing.expect(set.sets.len == 1);
+        try testing.expect(set.sets.buffer[0] == .range);
+        try testing.expect(set.sets.buffer[0].range[0] == '0');
+        try testing.expect(set.sets.buffer[0].range[1] == '9');
+    }
+    {
+        const set = try parseCharSet("^0-9a-z");
+        try testing.expect(set.negated);
+        try testing.expect(set.sets.len == 2);
+        try testing.expect(set.sets.buffer[0] == .range);
+        try testing.expect(set.sets.buffer[0].range[0] == '0');
+        try testing.expect(set.sets.buffer[0].range[1] == '9');
+        try testing.expect(set.sets.buffer[1] == .range);
+        try testing.expect(set.sets.buffer[1].range[0] == 'a');
+        try testing.expect(set.sets.buffer[1].range[1] == 'z');
+    }
+    {
+        const set = try parseCharSet("ABC0-9DEFa-zGHI");
+        try testing.expect(set.sets.len == 5);
+        try testing.expect(set.sets.buffer[0] == .chars);
+        try testing.expect(set.sets.buffer[0].chars.len == 3);
+        try testing.expectEqualStrings("ABC", set.sets.buffer[0].chars);
+        try testing.expect(set.sets.buffer[1] == .range);
+        try testing.expect(set.sets.buffer[1].range[0] == '0');
+        try testing.expect(set.sets.buffer[1].range[1] == '9');
+        try testing.expect(set.sets.buffer[2] == .chars);
+        try testing.expect(set.sets.buffer[2].chars.len == 3);
+        try testing.expectEqualStrings("DEF", set.sets.buffer[2].chars);
+        try testing.expect(set.sets.buffer[3] == .range);
+        try testing.expect(set.sets.buffer[3].range[0] == 'a');
+        try testing.expect(set.sets.buffer[3].range[1] == 'z');
+        try testing.expect(set.sets.buffer[4] == .chars);
+        try testing.expect(set.sets.buffer[4].chars.len == 3);
+        try testing.expectEqualStrings("GHI", set.sets.buffer[4].chars);
+    }
+}
