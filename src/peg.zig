@@ -17,11 +17,14 @@ pub fn panicf(comptime fmt: []const u8, args: anytype) noreturn {
 }
 
 pub fn print(comptime fmt: []const u8, args: anytype) void {
-    if (std.log.level == .debug)
-        std.debug.print(fmt, args);
+    std.log.scoped(.peg).debug(fmt, args);
 }
 pub fn println(comptime fmt: []const u8, args: anytype) void {
-    if (std.log.level == .debug)
+    // TODO remove this temporary hack to avoid printing extra newlines
+    // https://github.com/ziglang/zig/issues/12201
+    if (@import("builtin").is_test)
+        print(fmt, args)
+    else
         print(fmt ++ "\n", args);
 }
 
