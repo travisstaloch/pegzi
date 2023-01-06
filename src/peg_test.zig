@@ -26,7 +26,7 @@ fn testEscape(input: anytype, expected: []const u8) !void {
     try testing.expectEqualStrings(expected, actual);
 }
 
-const log_level = .debug;
+const log_level = .err;
 
 test "parse escapes 1" {
     testing.log_level = log_level;
@@ -398,5 +398,21 @@ test "negations" {
         try testing.expectEqual(@as(usize, 2), items.len);
         try testing.expect(items[0] == .char_set);
         try testing.expect(items[0].char_set.flags.contains(.not));
+    }
+}
+
+test "actions" {
+    {
+        const in =
+            \\a<- &{ code here with nested curlies { { {} } } }
+            \\
+        ;
+        var p = testParserInit(in);
+        defer p.deinit();
+        const g = try p.parse();
+        const root = g.rules.values()[0];
+        try testing.expect(root == .action);
+        try testing.expect(root.action.flags.contains(.amp));
+        try testing.expect(p.next() == .end);
     }
 }

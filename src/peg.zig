@@ -12,24 +12,22 @@ pub fn firstN(s: []const u8, n: usize) []const u8 {
     return s[0..@min(s.len, n)];
 }
 
-pub fn panic(m: []const u8) noreturn {
-    @panic(m);
-}
 pub fn panicf(comptime fmt: []const u8, args: anytype) noreturn {
     std.debug.panic(fmt, args);
 }
 
-fn print(comptime fmt: []const u8, args: anytype) void {
+pub fn print(comptime fmt: []const u8, args: anytype) void {
     if (std.log.level == .debug)
         std.debug.print(fmt, args);
 }
-fn println(comptime fmt: []const u8, args: anytype) void {
+pub fn println(comptime fmt: []const u8, args: anytype) void {
     if (std.log.level == .debug)
         print(fmt ++ "\n", args);
 }
 
 pub const Grammar = struct {
     rules: std.StringArrayHashMapUnmanaged(Node) = .{},
+    eof_identifier: []const u8 = "eof",
 
     pub fn format(g: Grammar, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         const vals = g.rules.values();
@@ -56,12 +54,13 @@ pub const Node = union(enum) {
     char_set: StrWithFlags,
     dot: VoidWithFlags,
     group: NodeWithFlags,
+    action: StrWithFlags,
     // end atoms
     seq: ListWithFlags,
     alt: ListWithFlags,
 
     pub const List = std.ArrayListUnmanaged(Node);
-    pub const Flag = enum { many, some, opt, not };
+    pub const Flag = enum { many, some, opt, not, amp };
     pub const Flags = std.enums.EnumSet(Flag);
     pub const Tag = std.meta.Tag(Node);
     pub fn WithFlags(comptime T: type) type {
@@ -84,7 +83,7 @@ pub const Node = union(enum) {
 
     pub fn deinit(n: *Node, alloc: Allocator) void {
         switch (n.*) {
-            .sym, .dstr, .sstr, .char_set, .dot => {},
+            .sym, .dstr, .sstr, .char_set, .dot, .action => {},
             .seq, .alt => |*s| {
                 for (s.payload.items) |*nn|
                     nn.deinit(alloc);
@@ -125,6 +124,11 @@ pub const Node = union(enum) {
                 try writer.writeByte(')');
             },
             .dot => try writer.writeByte('.'),
+            .action => |s| {
+                try writer.writeByte('{');
+                _ = try writer.write(s.payload);
+                try writer.writeByte('}');
+            },
         }
         if (many) try writer.writeByte('*');
         if (some) try writer.writeByte('+');
@@ -226,7 +230,7 @@ pub const Parser = struct {
                 line += 1;
             } else col += 1;
         }
-        println("{s}:{}:{}: " ++ fmt, .{ p.args.filepath, line, col } ++ args);
+        std.log.err("{s}:{}:{}: " ++ fmt, .{ p.args.filepath, line, col } ++ args);
     }
 
     fn ItemParser(comptime T: type) type {
@@ -288,7 +292,9 @@ pub const Parser = struct {
         }
     }
 
-    /// Consumes `p.content` until `end`. asserts that `p.content` starts with 'start'.
+    /// Consumes `p.content` until `end`. asserts that `p.content` starts
+    /// with 'start'.  If behavior == .escape, escape sequences are parsed
+    /// and converted in-place in the returned slice.
     pub fn parseBetween(p: *Parser, start: u8, end: u8, comptime behavior: enum { escape, dont_escape }) ![]u8 {
         assert(p.content.len > 0 and p.content[0] == start);
         var fbs = std.io.fixedBufferStream(p.content);
@@ -314,6 +320,29 @@ pub const Parser = struct {
                 try writer.writeByte(b);
                 index += 1;
             }
+        }
+    }
+
+    /// like `parseBetween` but skips over nested `start` ... `end` content.
+    /// this allows actions delimited by '{' ... '}' to contain  '{' ... '}'
+    fn parseBetweenWithNesting(p: *Parser, start: u8, end: u8) ![]u8 {
+        assert(p.content.len > 0 and p.content[0] == start);
+        var fbs = std.io.fixedBufferStream(p.content);
+        const writer = fbs.writer();
+
+        var index: usize = 1;
+        var depth: usize = 1;
+        while (true) {
+            const b = p.content[index];
+            const endmatch = b == end;
+            depth -= @boolToInt(endmatch);
+            if (endmatch and depth == 0) {
+                defer p.content = p.content[index + 1 ..];
+                return p.content[0..fbs.pos];
+            }
+            try writer.writeByte(b);
+            depth += @boolToInt(b == start);
+            index += 1;
         }
     }
 
@@ -354,7 +383,7 @@ pub const Parser = struct {
         // start atoms
         dot,
         lparen,
-        action,
+        action: []const u8,
         dstr: []const u8,
         sstr: []const u8,
         char_set: []const u8,
@@ -379,6 +408,7 @@ pub const Parser = struct {
                 .sstr => |s| try writer.print("'{s}'", .{s}),
                 .dstr => |s| try writer.print("\"{s}\"", .{s}),
                 .char_set => |s| try writer.print("[{s}]", .{s}),
+                .action => |s| try writer.print("{{ {s} }}", .{s}),
                 .many => try writer.writeByte('*'),
                 .some => try writer.writeByte('+'),
                 .opt => try writer.writeByte('?'),
@@ -390,7 +420,6 @@ pub const Parser = struct {
                 .lparen => try writer.writeByte('('),
                 .rparen => try writer.writeByte(')'),
                 .amp => try writer.writeByte('&'),
-                .action => try writer.writeByte('<'),
             }
         }
     };
@@ -401,10 +430,9 @@ pub const Parser = struct {
     }
 
     fn matchSkipContent(p: *Parser, s: []const u8) bool {
-        return if (mem.startsWith(u8, p.content, s)) blk: {
-            p.content = p.content[s.len..];
-            break :blk true;
-        } else false;
+        const match = mem.startsWith(u8, p.content, s);
+        p.content = p.content[s.len * @boolToInt(match) ..];
+        return match;
     }
 
     fn nextToken(p: *Parser) !Token {
@@ -417,20 +445,21 @@ pub const Parser = struct {
             '[' => .{ .char_set = try p.parseBetween('[', ']', .escape) },
             '/' => p.skipYield(1, .bar),
             '!' => p.skipYield(1, .not),
+            '&' => p.skipYield(1, .amp),
             '?' => p.skipYield(1, .opt),
             '*' => p.skipYield(1, .many),
             '+' => p.skipYield(1, .some),
             '(' => p.skipYield(1, .lparen),
             ')' => p.skipYield(1, .rparen),
+            '{' => .{ .action = try p.parseBetweenWithNesting('{', '}') },
+            '}' => unreachable,
             '.' => p.skipYield(1, .dot),
             else => if (p.matchSkipContent("<-"))
                 .leftarrow
-            else if (std.ascii.isAlphabetic(c))
-                Token{ .sym = try p.readUntilCharFn(
-                    not(u8, oneOf(u8, std.ascii.isAlphanumeric, isItem(u8, '_'))),
-                    0,
-                ) }
-            else {
+            else if (std.ascii.isAlphabetic(c)) .{ .sym = try p.readUntilCharFn(
+                not(u8, oneOf(u8, std.ascii.isAlphanumeric, isItem(u8, '_'))),
+                0,
+            ) } else {
                 p.errFmt("internal error: nextToken() unhandled '{c}'", .{c});
                 panicf("internal error: nextToken() unhandled '{c}'", .{c});
             },
@@ -473,6 +502,7 @@ pub const Parser = struct {
         return istag;
     }
 
+    /// parse a raw charset literal into a `CharSet`
     pub fn parseCharSet(bytes_: []const u8) !CharSet {
         var bytes = bytes_;
         var set: CharSet = .{};
@@ -521,6 +551,7 @@ pub const Parser = struct {
             .sstr => |t| Node.init(.sstr, t),
             .char_set => |t| Node.init(.char_set, t),
             .dot => Node.init(.dot, {}),
+            .action => |t| Node.init(.action, t),
             else => |t| {
                 p.errFmt("unexpected token: '{}'", .{t});
                 return error.UnexpectedToken;
@@ -540,23 +571,22 @@ pub const Parser = struct {
         return node;
     }
 
-    fn parseAction(_: *Parser) Error!Node {
-        panic("TODO parseAction()");
-    }
-
+    // Action <- '{' < [^}]* > '}' Spacing
     // Prefix <- AND Action
     //           / ( AND | NOT )? Suffix
     fn parsePrefix(p: *Parser) Error!Node {
         println("parsePrefix() peeks {any}", .{p.peeks.slice()});
         if (p.peek(0) == .amp and p.peek(1) == .action) {
-            return p.parseAction();
+            _ = p.next();
+            var node = Node.init(.action, p.next().action);
+            node.flags().insert(.amp);
+            return node;
         }
-        if (p.peek(0) == .amp) {
-            panic("todo amp");
-        }
+        const isand = p.consume(.amp);
         const isnot = p.consume(.not);
         var node = try p.parseSuffix();
         if (isnot) node.flags().insert(.not);
+        if (isand) node.flags().insert(.amp);
         return node;
     }
 
