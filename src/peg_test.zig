@@ -169,7 +169,7 @@ test "peek 1" {
     try testing.expectEqualStrings("e", p.next().sym);
     try testing.expect(p.next() == .bar);
     try testing.expectEqualStrings("f", p.next().sym);
-    try testing.expect(p.next() == .end);
+    try testing.expect(p.next() == .eof);
 }
 
 test "comments" {
@@ -413,6 +413,22 @@ test "actions" {
         const root = g.rules.values()[0];
         try testing.expect(root == .action);
         try testing.expect(root.action.flags.contains(.amp));
-        try testing.expect(p.next() == .end);
+    }
+}
+
+test "begin / end" {
+    {
+        const in =
+            \\a <- < b c* > d
+            \\
+        ;
+        var p = testParserInit(in);
+        defer p.deinit();
+        const g = try p.parse();
+        const root = g.rules.values()[0];
+        try testing.expect(root == .seq);
+        try testing.expect(root.seq.payload.items.len == 5);
+        try testing.expect(root.seq.payload.items[0] == .begin);
+        try testing.expect(root.seq.payload.items[3] == .end);
     }
 }

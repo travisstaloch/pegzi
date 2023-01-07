@@ -4,7 +4,7 @@ Definition <- Identifier LEFTARROW Expression
 Expression <- Sequence ( SLASH Sequence )*
 Sequence <- Prefix*
 Prefix <- AND Action
-                / ( AND | NOT )? Suffix
+                / ( AND / NOT )? Suffix
 Suffix <- Primary ( QUERY / STAR / PLUS )?
 Primary <- Identifier !LEFTARROW
                 / OPEN Expression CLOSE

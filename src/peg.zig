@@ -58,6 +58,8 @@ pub const Node = union(enum) {
     dot: VoidWithFlags,
     group: NodeWithFlags,
     action: StrWithFlags,
+    begin: VoidWithFlags,
+    end: VoidWithFlags,
     // end atoms
     seq: ListWithFlags,
     alt: ListWithFlags,
@@ -86,7 +88,7 @@ pub const Node = union(enum) {
 
     pub fn deinit(n: *Node, alloc: Allocator) void {
         switch (n.*) {
-            .sym, .dstr, .sstr, .char_set, .dot, .action => {},
+            .sym, .dstr, .sstr, .char_set, .dot, .action, .begin, .end => {},
             .seq, .alt => |*s| {
                 for (s.payload.items) |*nn|
                     nn.deinit(alloc);
@@ -127,6 +129,8 @@ pub const Node = union(enum) {
                 try writer.writeByte(')');
             },
             .dot => try writer.writeByte('.'),
+            .begin => try writer.writeByte('<'),
+            .end => try writer.writeByte('>'),
             .action => |s| {
                 try writer.writeByte('{');
                 _ = try writer.write(s.payload);
@@ -264,7 +268,7 @@ pub const Parser = struct {
         }.func;
     }
 
-    // escapes \n, \r, \\, \t, \', \", \NNN (octal)
+    // supports escape sequences \n, \r, \\, \t, \', \", \[, \] \NNN (octal)
     pub fn parseEscapeSequence(p: *Parser, slice: []const u8, offsetp: *usize) !u8 {
         const offset = offsetp.*;
         assert(slice.len > offset);
@@ -274,25 +278,27 @@ pub const Parser = struct {
 
         var skiplen: u8 = 2;
         defer offsetp.* += skiplen;
-        switch (slice[offset + 1]) {
-            'n' => return '\n',
-            'r' => return '\r',
-            '\\' => return '\\',
-            't' => return '\t',
-            '\'' => return '\'',
-            '"' => return '"',
-            '0'...'7' => {
+        return switch (slice[offset + 1]) {
+            'n' => '\n',
+            'r' => '\r',
+            '\\' => '\\',
+            't' => '\t',
+            '\'' => '\'',
+            '"' => '"',
+            '[' => '[',
+            ']' => ']',
+            '0'...'7' => blk: {
                 const octstr = slice[offset + 1 .. offset + 4];
                 assert(octstr.len == 3);
                 const oct = try std.fmt.parseUnsigned(u8, octstr, 8);
                 skiplen += 2;
-                return oct;
+                break :blk oct;
             },
-            else => {
+            else => blk: {
                 p.errFmt("invalid escape '{c}'", .{slice[offset + 1]});
-                return error.InvalidEscape;
+                break :blk error.InvalidEscape;
             },
-        }
+        };
     }
 
     /// Consumes `p.content` until `end`. asserts that `p.content` starts
@@ -371,7 +377,7 @@ pub const Parser = struct {
     /// These are ordered into groups
     /// ---
     pub const Token = union(enum) {
-        end,
+        eof,
         bar,
         rparen,
         // end seq terminators
@@ -386,6 +392,8 @@ pub const Parser = struct {
         // start atoms
         dot,
         lparen,
+        begin,
+        end,
         action: []const u8,
         dstr: []const u8,
         sstr: []const u8,
@@ -418,11 +426,13 @@ pub const Parser = struct {
                 .not => try writer.writeByte('!'),
                 .dot => try writer.writeByte('.'),
                 .bar => try writer.writeByte('/'),
-                .end => _ = try writer.write("EOF"),
+                .eof => _ = try writer.write("EOF"),
                 .leftarrow => _ = try writer.write("<-"),
                 .lparen => try writer.writeByte('('),
                 .rparen => try writer.writeByte(')'),
                 .amp => try writer.writeByte('&'),
+                .begin => try writer.writeByte('<'),
+                .end => try writer.writeByte('>'),
             }
         }
     };
@@ -440,7 +450,7 @@ pub const Parser = struct {
 
     fn nextToken(p: *Parser) !Token {
         p.skipWs();
-        if (p.content.len == 0) return .end;
+        if (p.content.len == 0) return .eof;
         const c = p.content[0];
         return switch (c) {
             '"' => .{ .dstr = try p.parseBetween('"', '"', .escape) },
@@ -457,14 +467,17 @@ pub const Parser = struct {
             '{' => .{ .action = try p.parseBetweenWithNesting('{', '}') },
             '}' => unreachable,
             '.' => p.skipYield(1, .dot),
-            else => if (p.matchSkipContent("<-"))
+            '>' => p.skipYield(1, .end),
+            '<' => if (p.matchSkipContent("<-"))
                 .leftarrow
-            else if (std.ascii.isAlphabetic(c)) .{ .sym = try p.readUntilCharFn(
+            else
+                p.skipYield(1, .begin),
+            else => if (std.ascii.isAlphabetic(c)) .{ .sym = try p.readUntilCharFn(
                 not(u8, oneOf(u8, std.ascii.isAlphanumeric, isItem(u8, '_'))),
                 0,
             ) } else {
                 p.errFmt("internal error: nextToken() unhandled '{c}'", .{c});
-                panicf("internal error: nextToken() unhandled '{c}'", .{c});
+                return error.UnexpectedToken;
             },
         };
     }
@@ -555,6 +568,8 @@ pub const Parser = struct {
             .char_set => |t| Node.init(.char_set, t),
             .dot => Node.init(.dot, {}),
             .action => |t| Node.init(.action, t),
+            .begin => Node.init(.begin, {}),
+            .end => Node.init(.end, {}),
             else => |t| {
                 p.errFmt("unexpected token: '{}'", .{t});
                 return error.UnexpectedToken;
@@ -619,7 +634,7 @@ pub const Parser = struct {
     }
 
     inline fn isExprEnd(p: *Parser) bool {
-        return !p.consume(.bar) or p.peek(1) == .leftarrow or p.peek(0) == .end;
+        return !p.consume(.bar) or p.peek(1) == .leftarrow or p.peek(0) == .eof;
     }
 
     // Expression <- Sequence ( SLASH Sequence )*
@@ -655,7 +670,7 @@ pub const Parser = struct {
     // Grammar <- Spacing Definition+ EndOfFile
     // Definition <- Identifier LEFTARROW Expression
     pub fn parse(p: *Parser) !Grammar {
-        while (p.peek(0) != .end) {
+        while (p.peek(0) != .eof) {
             p.debugContent();
             const identifier = (try p.expectToken(.sym)).sym;
             _ = try p.expectToken(.leftarrow);
