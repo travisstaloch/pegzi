@@ -58,16 +58,31 @@ inline fn getGrammar(in: anytype) !Grammar {
 
 test "parse flags" {
     testing.log_level = log_level;
-    {
-        var g = try getGrammar(
-            \\a <- !"a"
-        );
-        defer g.deinit(talloc);
-        const dstr = g.rules.values()[0];
-        try testing.expect(dstr == .dstr);
-        try testing.expect(dstr.flagsConst().contains(.not));
-    }
+
+    var g = try getGrammar(
+        \\a <- !"a"?
+    );
+    defer g.deinit(talloc);
+    const dstr = g.rules.values()[0];
+    try testing.expect(dstr == .dstr);
+    try testing.expect(dstr.flagsConst().contains(.not));
+    try testing.expect(dstr.flagsConst().contains(.opt));
 }
+
+test "parse flags extra suffix" {
+    var arr = "a <- !\"a\"?*".*;
+    var p = Parser.init(talloc, &arr, .{ .filepath = test_filepath });
+    defer p.deinit();
+    try testing.expectError(error.UnexpectedToken, p.parse());
+}
+
+test "parse flags extra prefix" {
+    var arr = "a <- !&\"a\"?".*;
+    var p = Parser.init(talloc, &arr, .{ .filepath = test_filepath });
+    defer p.deinit();
+    try testing.expectError(error.UnexpectedToken, p.parse());
+}
+
 test "parse basic 1" {
     testing.log_level = log_level;
     {

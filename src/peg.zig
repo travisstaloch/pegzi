@@ -235,7 +235,7 @@ pub const Parser = struct {
                 line += 1;
             } else col += 1;
         }
-        std.log.err("{s}:{}:{}: " ++ fmt, .{ p.args.filepath, line, col } ++ args);
+        std.log.err("{s}:{}:{}: " ++ fmt ++ "\n", .{ p.args.filepath, line, col } ++ args);
     }
 
     fn ItemParser(comptime T: type) type {
@@ -378,14 +378,15 @@ pub const Parser = struct {
         eof,
         bar,
         rparen,
-        // end seq terminators
-        not,
-        amp,
-        // end prefix mods
+        // end seq terminators group 1
         many,
         some,
         opt,
-        // end suffix mods
+        // end suffix mods - seq terminators group 2. there should only be
+        // one of these and it should be consumed before the next atom
+        not,
+        amp,
+        // end prefix mods
         leftarrow,
         // start atoms
         dot,
@@ -405,7 +406,7 @@ pub const Parser = struct {
             return @enumToInt(t) >= first_atom;
         }
 
-        const last_seq_terminator = @enumToInt(Token.rparen);
+        const last_seq_terminator = @enumToInt(Token.opt);
         pub inline fn isEndSeq(t: Token) bool {
             return @enumToInt(t) <= last_seq_terminator;
         }
@@ -504,7 +505,7 @@ pub const Parser = struct {
     fn expectToken(p: *Parser, tag: Token.Tag) !Token {
         const t = p.next();
         if (t != tag) {
-            p.errFmt("unexpected token {s}: '{}'", .{ @tagName(t), t });
+            p.errFmt("unexpected token: '{}'", .{t});
             return error.UnexpectedToken;
         }
         return t;
@@ -598,12 +599,16 @@ pub const Parser = struct {
             node.flags().insert(.amp);
             return node;
         }
-        const isand = p.consume(.amp);
-        const isnot = p.consume(.not);
-        var node = try p.parseSuffix();
-        if (isnot) node.flags().insert(.not);
-        if (isand) node.flags().insert(.amp);
-        return node;
+
+        return if (p.consume(.amp)) blk: {
+            var node = try p.parseSuffix();
+            node.flags().insert(.amp);
+            break :blk node;
+        } else if (p.consume(.not)) blk: {
+            var node = try p.parseSuffix();
+            node.flags().insert(.not);
+            break :blk node;
+        } else try p.parseSuffix();
     }
 
     inline fn isSeqEnd(p: *Parser) bool {
