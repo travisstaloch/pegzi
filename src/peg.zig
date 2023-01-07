@@ -103,10 +103,8 @@ pub const Node = union(enum) {
 
     pub fn format(n: Node, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         const nflags = n.flagsConst();
-        const many = nflags.contains(.many);
-        const some = nflags.contains(.some);
-        const opt = nflags.contains(.opt);
         if (nflags.contains(.not)) try writer.writeByte('!');
+        if (nflags.contains(.amp)) try writer.writeByte('&');
         // _ = try writer.write(@tagName(n));
         // _ = try writer.write(": ");
 
@@ -137,9 +135,9 @@ pub const Node = union(enum) {
                 try writer.writeByte('}');
             },
         }
-        if (many) try writer.writeByte('*');
-        if (some) try writer.writeByte('+');
-        if (opt) try writer.writeByte('?');
+        if (nflags.contains(.many)) try writer.writeByte('*');
+        if (nflags.contains(.some)) try writer.writeByte('+');
+        if (nflags.contains(.opt)) try writer.writeByte('?');
     }
 
     pub inline fn flags(n: *Node) *Flags {
